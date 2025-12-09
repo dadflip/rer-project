@@ -1,0 +1,38 @@
+services:
+  wireguard-node:
+    image: linuxserver/wireguard
+    container_name: rer-wireguard-node
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    env_file:
+      - ./wireguard.env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+      SERVERURL: ${SERVERURL}
+      SERVERPORT: ${SERVERPORT}
+      PEERS: ${PEERS}
+      PEERDNS: ${PEERDNS}
+      INTERNAL_SUBNET: ${INTERNAL_SUBNET}
+    volumes:
+      - ./vpn/config:/config
+      - /lib/modules:/lib/modules:ro
+    ports:
+      - "${SERVERPORT}:51820/udp"
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    restart: unless-stopped
+    networks:
+      lan-local:
+        ipv4_address: ${IP_WG_LAN}
+      vpn-net:
+        ipv4_address: ${IP_WG_VPN}
+
+networks:
+  lan-local:
+    external: true
+
+  vpn-net:
+    external: true

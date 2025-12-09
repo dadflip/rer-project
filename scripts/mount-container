@@ -1,0 +1,80 @@
+#!/bin/bash
+set -e
+
+# Vérifie que fzf est installé sur l'hôte
+if ! command -v fzf >/dev/null 2>&1; then
+    echo "fzf n'est pas installé sur l'hôte. Installez-le d'abord (apt, brew, etc.)."
+    exit 1
+fi
+
+# Choisir le conteneur via fzf
+CONTAINER=$(docker ps --format '{{.Names}}' | fzf --prompt="Choisir un conteneur : ")
+if [ -z "$CONTAINER" ]; then
+    echo "Aucun conteneur sélectionné."
+    exit 1
+fi
+echo "Conteneur choisi : $CONTAINER"
+
+# Détection du shell
+if docker exec "$CONTAINER" which bash >/dev/null 2>&1; then
+    SHELL="bash"
+else
+    SHELL="sh"
+fi
+
+# Installer lf et nano si absents
+if ! docker exec "$CONTAINER" which lf >/dev/null 2>&1; then
+    echo "Installation de lf et nano dans le conteneur..."
+    if docker exec "$CONTAINER" which apk >/dev/null 2>&1; then
+        docker exec "$CONTAINER" apk update
+        docker exec "$CONTAINER" apk add lf nano
+    elif docker exec "$CONTAINER" which apt >/dev/null 2>&1; then
+        docker exec "$CONTAINER" apt update -y
+        docker exec "$CONTAINER" apt install -y lf nano
+    elif docker exec "$CONTAINER" which yum >/dev/null 2>&1; then
+        docker exec "$CONTAINER" yum install -y lf nano
+    else
+        echo "Aucun gestionnaire de paquets compatible."
+        exit 1
+    fi
+fi
+
+# Dossier pour copier les fichiers vers l'hôte
+HOST_COPY_DIR="./from-container/$CONTAINER"
+mkdir -p "$HOST_COPY_DIR"
+
+# Script temporaire dans le conteneur pour lancer lf
+TMP_SCRIPT=$(mktemp)
+cat > "$TMP_SCRIPT" << 'EOF'
+#!/bin/sh
+# Lancer lf avec nano comme éditeur par défaut
+export VISUAL="nano"
+export EDITOR="nano"
+lf
+EOF
+
+docker cp "$TMP_SCRIPT" "$CONTAINER:/tmp/lf-run.sh"
+docker exec "$CONTAINER" chmod +x /tmp/lf-run.sh
+rm "$TMP_SCRIPT"
+
+# Menu interactif
+while true; do
+    CHOICE=$(echo -e "Explorateur de fichiers\nLigne de commande\nQuitter" | fzf --prompt="Choisir une option : ")
+    case "$CHOICE" in
+        "Explorateur de fichiers")
+            echo "Lancement de lf..."
+            docker exec -it "$CONTAINER" $SHELL -lc "/tmp/lf-run.sh"
+            ;;
+        "Ligne de commande")
+            echo "Ouverture d'une session shell..."
+            docker exec -it "$CONTAINER" $SHELL
+            ;;
+        "Quitter")
+            echo "Fermeture du menu pour le conteneur $CONTAINER."
+            break
+            ;;
+        *)
+            echo "Option invalide."
+            ;;
+    esac
+done

@@ -1,0 +1,44 @@
+services:
+  dns-node:
+    build: ./dns
+    container_name: rer-dns-node
+    env_file:
+      - ./dns-dhcp.env
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ./dns/config:/etc/dnsmasq.d
+    command: >
+      bash -c "dnsmasq -k --conf-file=/etc/dnsmasq.d/dnsmasq.conf"
+    restart: unless-stopped
+    networks:
+      lan-local:
+        ipv4_address: ${IP_DNS_NODE}
+
+  dhcp-node:
+    build: ./dhcp
+    container_name: rer-dhcp-node
+    env_file:
+      - ./dns-dhcp.env
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ./dhcp/config:/etc/dnsmasq.d
+    command: >
+      bash -c "dnsmasq -k --conf-file=/etc/dnsmasq.d/dnsmasq.conf"
+    restart: unless-stopped
+    networks:
+      lan-local:
+        ipv4_address: ${IP_DHCP_NODE}
+
+    # network_mode: host   # utilise directement le réseau de l'hôte
+
+networks:
+  lan-local:
+    external: true

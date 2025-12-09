@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: django-api
+  template:
+    metadata:
+      labels:
+        app: django-api
+    spec:
+      containers:
+        - name: django
+          image: your-registry/rer-backend:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: rer-config
+            - secretRef:
+                name: rer-secrets
+          env:
+            - name: DEBUG
+              value: "False"
+          livenessProbe:
+            httpGet:
+              path: /health/
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
+

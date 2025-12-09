@@ -1,0 +1,62 @@
+#!/bin/bash
+set -e
+
+# Génère les fichiers dnsmasq pour DNS et DHCP à partir du .env
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/dns-dhcp.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "$ENV_FILE introuvable !"
+  exit 1
+fi
+
+# Charger les variables depuis .env
+set -o allexport
+source "$ENV_FILE"
+set +o allexport
+
+# Créer les dossiers de config si absents
+mkdir -p "${SCRIPT_DIR}/dns/config" "${SCRIPT_DIR}/dhcp/config"
+
+# Génération du fichier DNS
+cat > "${SCRIPT_DIR}/dns/config/dnsmasq.conf" <<EOF
+# Serveur DNS pour le LAN $LOCAL_DOMAIN
+log-queries
+log-facility=/var/log/dnsmasq.log
+interface=eth0
+bind-interfaces
+domain-needed
+bogus-priv
+cache-size=1000
+neg-ttl=3600
+server=$UPSTREAM_DNS1
+server=$UPSTREAM_DNS2
+domain=$LOCAL_DOMAIN
+
+# Entrées statiques
+address=/postgres.$LOCAL_DOMAIN/$IP_POSTGRES_NODE
+address=/k8snode.$LOCAL_DOMAIN/$IP_K8S_NODE
+address=/dhcp.$LOCAL_DOMAIN/$IP_DHCP_NODE
+EOF
+
+# Génération du fichier DHCP
+cat > "${SCRIPT_DIR}/dhcp/config/dnsmasq.conf" <<EOF
+# Serveur DHCP pour le LAN $LOCAL_DOMAIN
+log-dhcp
+log-facility=/var/log/dhcpd.log
+interface=eth0
+dhcp-authoritative
+dhcp-range=$LAN_RANGE_START,$LAN_RANGE_END,$LAN_NETMASK,24h
+dhcp-option=3,$LAN_GATEWAY      # passerelle
+dhcp-option=6,$LAN_DNS          # DNS
+dhcp-option=42,$LAN_GATEWAY      # NTP option (facultatif)
+
+# IP fixes
+dhcp-host=postgres.$LOCAL_DOMAIN,$IP_POSTGRES_NODE
+dhcp-host=k8snode.$LOCAL_DOMAIN,$IP_K8S_NODE
+dhcp-host=dhcp.$LOCAL_DOMAIN,$IP_DHCP_NODE
+EOF
+
+echo "Fichiers dnsmasq générés avec succès :"
+echo " - DNS : ${SCRIPT_DIR}/dns/config/dnsmasq.conf"
+echo " - DHCP : ${SCRIPT_DIR}/dhcp/config/dnsmasq.conf"

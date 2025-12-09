@@ -1,0 +1,512 @@
+#!/bin/bash
+# docker-cli.sh - Gestionnaire CLI de topologie réseau Docker
+
+LAN_NET="lan-local"
+PREFIX="client"
+IMAGE_DEFAULT="ubuntu:22.04"
+INITSCRIPT_FILE="$HOME/.docker-lab-initscript.sh"
+
+# Couleurs
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
+
+# Script d'initialisation par défaut
+DEFAULT_INITSCRIPT='#!/bin/bash
+# Script exécuté au démarrage de chaque container
+apt update && apt install -y isc-dhcp-client iproute2 iputils-ping net-tools curl wget vim >/dev/null 2>&1
+dhclient -v eth0
+echo "Container initialized successfully"
+'
+
+# -----------------------
+# Gestion du script init
+# -----------------------
+load_initscript() {
+    if [ -f "$INITSCRIPT_FILE" ]; then
+        cat "$INITSCRIPT_FILE"
+    else
+        echo "$DEFAULT_INITSCRIPT"
+    fi
+}
+
+save_initscript() {
+    echo "$1" > "$INITSCRIPT_FILE"
+    chmod +x "$INITSCRIPT_FILE"
+}
+
+edit_initscript() {
+    if [ ! -f "$INITSCRIPT_FILE" ]; then
+        echo "$DEFAULT_INITSCRIPT" > "$INITSCRIPT_FILE"
+    fi
+    
+    ${EDITOR:-nano} "$INITSCRIPT_FILE"
+    
+    echo -e "${GREEN}Init script saved to: $INITSCRIPT_FILE${NC}"
+}
+
+show_initscript() {
+    clear
+    echo -e "${CYAN}╭───────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  Current Init Script                              ${CYAN}│${NC}"
+    echo -e "${CYAN}╰───────────────────────────────────────────────────╯${NC}"
+    echo ""
+    
+    if [ -f "$INITSCRIPT_FILE" ]; then
+        cat -n "$INITSCRIPT_FILE"
+    else
+        echo "$DEFAULT_INITSCRIPT" | cat -n
+    fi
+    
+    echo ""
+    read -p "Press ENTER to continue..."
+}
+
+# -----------------------
+# Fonctions Docker Core
+# -----------------------
+
+ensure_network_exists() {
+    if ! docker network ls --format '{{.Name}}' | grep -q "^$LAN_NET$"; then
+        echo -e "${YELLOW}[INFO]${NC} Network $LAN_NET not found. Creating it..."
+        docker network create --subnet 192.168.1.0/24 "$LAN_NET" >/dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}[SUCCESS]${NC} Network $LAN_NET created successfully."
+        else
+            echo -e "${RED}[FATAL]${NC} Failed to create network $LAN_NET. Check Docker daemon status."
+            exit 1
+        fi
+    fi
+}
+
+get_next_name() {
+    local i=1
+    while docker ps -a --format '{{.Names}}' | grep -q "^${PREFIX}$(printf "%02d" $i)$"; do
+        ((i++))
+    done
+    printf "%s%02d" "$PREFIX" "$i"
+}
+
+create_container() {
+    local NAME="$1"
+    local IMAGE="${2:-$IMAGE_DEFAULT}"
+    local USE_INIT="${3:-yes}"
+    
+    [[ -z "$NAME" ]] && NAME=$(get_next_name)
+    
+    if docker ps -a --format '{{.Names}}' | grep -q "^$NAME$"; then
+        echo -e "${RED}[ERROR]${NC} Container $NAME already exists."
+        return 1
+    fi
+    
+    echo -e "${BLUE}[INFO]${NC} Creating container $NAME on network $LAN_NET..."
+    
+    # Préparer la commande d'init
+    local INIT_CMD="tail -f /dev/null"
+    if [[ "$USE_INIT" == "yes" ]]; then
+        local INITSCRIPT=$(load_initscript)
+        INIT_CMD="bash -c '$(echo "$INITSCRIPT" | tr '\n' ' '); tail -f /dev/null'"
+    fi
+    
+    docker run -d --name "$NAME" --net "$LAN_NET" --hostname "$NAME" \
+        "$IMAGE" bash -c "$INIT_CMD" >/dev/null
+    
+    if [ $? -eq 0 ]; then
+        sleep 2
+        
+        # Récupérer l'IP
+        local IP=""
+        for i in {1..10}; do
+            IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$NAME" 2>/dev/null)
+            [[ -n "$IP" ]] && break
+            sleep 1
+        done
+        
+        if [[ -n "$IP" ]]; then
+            echo -e "${GREEN}[SUCCESS]${NC} Container created:"
+            echo -e "  Name:    ${YELLOW}$NAME${NC}"
+            echo -e "  IP:      ${CYAN}$IP${NC}"
+            echo -e "  Network: $LAN_NET"
+            echo -e "  Image:   $IMAGE"
+        else
+             echo -e "${RED}[ERROR]${NC} Failed to retrieve IP address for $NAME."
+        fi
+    else
+        echo -e "${RED}[ERROR]${NC} Failed to create container (Docker run command failed)."
+    fi
+}
+
+delete_container() {
+    local NAME="$1"
+    
+    read -p "Delete container $NAME? (y/N): " CONFIRM
+    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+        docker rm -f "$NAME" >/dev/null 2>&1
+        echo -e "${GREEN}[SUCCESS]${NC} Container $NAME deleted."
+    else
+        echo "Cancelled."
+    fi
+}
+
+start_container() {
+    local NAME="$1"
+    docker start "$NAME" >/dev/null 2>&1
+    echo -e "${GREEN}[SUCCESS]${NC} Container $NAME started."
+}
+
+stop_container() {
+    local NAME="$1"
+    docker stop "$NAME" >/dev/null 2>&1
+    echo -e "${GREEN}[SUCCESS]${NC} Container $NAME stopped."
+}
+
+exec_shell() {
+    local NAME="$1"
+    clear
+    echo -e "${GREEN}╭──────────────────────────────────────────────╮${NC}"
+    echo -e "${GREEN}│${NC}  Shell: ${YELLOW}$NAME${NC}"
+    echo -e "${GREEN}╰──────────────────────────────────────────────╯${NC}"
+    echo -e "${YELLOW}Type 'exit' to return${NC}\n"
+    docker exec -it "$NAME" bash 2>/dev/null || docker exec -it "$NAME" sh
+}
+
+# -----------------------
+# Visualisation
+# -----------------------
+draw_topology() {
+    clear
+    echo -e "${CYAN}"
+    cat << "EOF"
+  ╭───────────────────────────────────────────────────────────────────╮
+  │                                                                   │
+  │              DOCKER NETWORK TOPOLOGY MANAGER                      │
+  │                                                                   │
+  ╰───────────────────────────────────────────────────────────────────╯
+EOF
+    echo -e "${NC}"
+    
+    NET_SUBNET=$(docker network inspect "$LAN_NET" -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null)
+    NET_GATEWAY=$(docker network inspect "$LAN_NET" -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null)
+    
+    echo -e "  ${CYAN}┌── NETWORK${NC} ${YELLOW}$LAN_NET${NC}"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}├──${NC} Subnet     ${NC}$NET_SUBNET"
+    echo -e "  ${CYAN}├──${NC} Gateway    ${NC}$NET_GATEWAY"
+    echo -e "  ${CYAN}│${NC}"
+    
+    local running=0
+    local stopped=0
+    
+    docker network inspect "$LAN_NET" -f '{{range .Containers}}{{.Name}}|{{.IPv4Address}}|{{end}}' 2>/dev/null | tr '|' '\n' | \
+        while IFS= read -r NAME; do
+            [[ -z "$NAME" ]] && continue
+            read -r IP
+            [[ -z "$IP" ]] && continue
+            
+            STATUS=$(docker inspect -f '{{.State.Status}}' "$NAME" 2>/dev/null)
+            UPTIME=$(docker inspect -f '{{.State.StartedAt}}' "$NAME" 2>/dev/null | cut -d'T' -f1)
+            
+            if [[ "$STATUS" == "running" ]]; then
+                STATUS_BADGE="${GREEN}[RUNNING]${NC}"
+                ((running++))
+            else
+                STATUS_BADGE="${RED}[STOPPED]${NC}"
+                ((stopped++))
+            fi
+            
+            DEVICE_TYPE="CLIENT"
+            if [[ "$NAME" == *"server"* ]]; then
+                DEVICE_TYPE="SERVER"
+            elif [[ "$NAME" == *"router"* ]]; then
+                DEVICE_TYPE="ROUTER"
+            fi
+            
+            IP_CLEAN=$(echo "$IP" | cut -d'/' -f1)
+            
+            echo -e "  ${CYAN}│${NC}"
+            echo -e "  ${CYAN}├── [$DEVICE_TYPE]${NC} ${YELLOW}$NAME${NC} $STATUS_BADGE"
+            echo -e "  ${CYAN}│   ├─${NC} Address    ${CYAN}$IP_CLEAN${NC}"
+            echo -e "  ${CYAN}│   └─${NC} Started    ${NC}$UPTIME"
+        done
+    
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}└── STATS${NC} ${GREEN}$running active${NC} ${BLUE}/${NC} ${RED}$stopped inactive${NC}"
+    echo ""
+}
+
+# ╔═════════════════════════════════════════════════════════════╗
+# ║                  MODIFICATION ICI : list_containers()         ║
+# ╚═════════════════════════════════════════════════════════════╝
+list_containers() {
+    clear
+    echo -e "${CYAN}╭──────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  Containers on $LAN_NET (Active/Inactive)"
+    echo -e "${CYAN}╰──────────────────────────────────────────────╯${NC}"
+    echo ""
+    
+    printf "  ${BLUE}%-15s %-18s %-12s %-20s${NC}\n" "NAME" "IP" "STATUS" "IMAGE"
+    echo "  ────────────────────────────────────────────────────────────────────"
+    
+    local CONTAINERS_SHOWN=""
+    
+    # 1. Conteneurs connectés au réseau LAN_NET (actifs ou non)
+    docker network inspect "$LAN_NET" -f '{{range .Containers}}{{.Name}}|{{.IPv4Address}}|{{end}}' 2>/dev/null | tr '|' '\n' | \
+        while IFS= read -r NAME; do
+            [[ -z "$NAME" ]] && continue
+            read -r IP
+            [[ -z "$IP" ]] && continue
+            
+            STATUS=$(docker inspect -f '{{.State.Status}}' "$NAME" 2>/dev/null)
+            IMAGE=$(docker inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null)
+            IP_CLEAN=$(echo "$IP" | cut -d'/' -f1)
+            
+            if [[ "$STATUS" == "running" ]]; then
+                printf "  ${GREEN}%-15s${NC} %-18s ${GREEN}%-12s${NC} %-20s\n" "$NAME" "$IP_CLEAN" "$STATUS" "$IMAGE"
+            else
+                printf "  ${RED}%-15s${NC} %-18s ${RED}%-12s${NC} %-20s\n" "$NAME" "$IP_CLEAN" "$STATUS" "$IMAGE"
+            fi
+            
+            # Stocker le nom pour éviter les doublons dans la section globale
+            CONTAINERS_SHOWN+="$NAME|"
+        done
+        
+    # 2. Conteneurs EXISTANTS (arrêtés) NON connectés à LAN_NET (liste globale)
+    
+    echo -e "${CYAN}╭──────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  Other Stopped Containers (Global)${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────╯${NC}"
+    
+    # Liste tous les conteneurs arrêtés
+    docker ps -a --filter "status=exited" --format "{{.Names}}" | \
+        while IFS= read -r NAME; do
+            # S'assurer que le conteneur n'a pas été affiché dans la liste LAN_NET
+            if [[ "$CONTAINERS_SHOWN" != *"$NAME"* ]]; then
+                STATUS=$(docker inspect -f '{{.State.Status}}' "$NAME" 2>/dev/null)
+                IMAGE=$(docker inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null)
+                
+                # IP est N/A car non pertinent ou non affecté
+                printf "  ${RED}%-15s${NC} %-18s ${RED}%-12s${NC} %-20s\n" "$NAME" "N/A" "$STATUS" "$IMAGE"
+            fi
+        done
+        
+    echo ""
+}
+# ╚═════════════════════════════════════════════════════════════╝
+
+
+show_stats() {
+    local TOTAL=$(docker ps -a --filter "network=$LAN_NET" --format '{{.Names}}' | wc -l)
+    local RUNNING=$(docker ps --filter "network=$LAN_NET" --format '{{.Names}}' | wc -l)
+    local STOPPED=$((TOTAL - RUNNING))
+    
+    clear
+    echo -e "${CYAN}╭──────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  Network Statistics"
+    echo -e "${CYAN}╰──────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  Network:    ${YELLOW}$LAN_NET${NC}"
+    echo -e "  Driver:     $(docker network inspect "$LAN_NET" -f '{{.Driver}}' 2>/dev/null)"
+    echo -e "  Subnet:     $(docker network inspect "$LAN_NET" -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null)"
+    echo -e "  Gateway:    $(docker network inspect "$LAN_NET" -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null)"
+    echo ""
+    echo -e "  Total:      $TOTAL containers (on $LAN_NET)"
+    echo -e "  ${GREEN}Running:    $RUNNING${NC}"
+    echo -e "  ${RED}Stopped:    $STOPPED${NC}"
+    echo ""
+}
+
+ping_test() {
+    echo -e "${MAGENTA}[PING TEST]${NC}"
+    echo ""
+    
+    read -p "Source container: " SRC
+    read -p "Destination (IP or name): " DST
+    
+    echo ""
+    echo -e "${CYAN}Testing: $SRC → $DST${NC}"
+    echo ""
+    
+    docker exec "$SRC" ping -c 4 "$DST" 2>/dev/null
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}[ERROR]${NC} Ping failed"
+    fi
+    echo ""
+}
+
+# -----------------------
+# Menu
+# -----------------------
+show_menu() {
+    echo -e "${CYAN}╭──────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}│${NC}  ${BLUE}Docker Network Manager${NC}"
+    echo -e "${CYAN}╰──────────────────────────────────────────────╯${NC}"
+    echo ""
+    echo -e "  ${GREEN}1.${NC} Topology View"
+    echo -e "  ${GREEN}2.${NC} Create Container"
+    echo -e "  ${GREEN}3.${NC} List Containers"
+    echo -e "  ${GREEN}4.${NC} Manage Container"
+    echo -e "  ${GREEN}5.${NC} Network Test (ping)"
+    echo -e "  ${GREEN}6.${NC} Network Statistics"
+    echo -e "  ${GREEN}7.${NC} Edit Init Script"
+    echo -e "  ${GREEN}8.${NC} Show Init Script"
+    echo -e "  ${RED}0.${NC} Exit"
+    echo ""
+}
+
+manage_container_menu() {
+    clear
+    list_containers
+    
+    read -p "Container name: " NAME
+    
+    # La vÃ©rification utilise docker ps -a, qui trouve les conteneurs arrÃªtÃ©s ou en cours
+    if ! docker ps -a --format '{{.Names}}' | grep -q "^$NAME$"; then
+        echo -e "${RED}[ERROR]${NC} Container not found"
+        sleep 2
+        return
+    fi
+    
+    while true; do
+        clear
+        STATUS=$(docker inspect -f '{{.State.Status}}' "$NAME" 2>/dev/null)
+        
+        echo -e "${CYAN}╭──────────────────────────────────────────────╮${NC}"
+        echo -e "${CYAN}│${NC}  Manage: ${YELLOW}$NAME${NC} [$STATUS]"
+        echo -e "${CYAN}╰──────────────────────────────────────────────╯${NC}"
+        echo ""
+        echo -e "  ${GREEN}1.${NC} View Details"
+        echo -e "  ${GREEN}2.${NC} Open Shell"
+        echo -e "  ${GREEN}3.${NC} View Logs"
+        
+        if [[ "$STATUS" == "running" ]]; then
+            echo -e "  ${YELLOW}4.${NC} Stop Container"
+        else
+            echo -e "  ${GREEN}4.${NC} Start Container"
+        fi
+        
+        echo -e "  ${RED}5.${NC} Delete Container"
+        echo -e "  ${BLUE}0.${NC} Back"
+        echo ""
+        
+        read -p "Choice: " CHOICE
+        
+        case $CHOICE in
+            1)
+                clear
+                docker inspect "$NAME" --format='
+╭── CONTAINER DETAILS ──────────────────────────────────────╮
+
+  Name       {{.Name}}
+  IP         {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}
+  Status     {{.State.Status}}
+  Created    {{.Created}}
+  Image      {{.Config.Image}}
+  Hostname   {{.Config.Hostname}}
+
+╰──────────────────────────────────────────────────────────╯
+' 2>/dev/null
+                read -p "Press ENTER..." 
+                ;;
+            2) exec_shell "$NAME" ;;
+            3)
+                clear
+                echo -e "${GREEN}╭──────────────────────────────────────────────╮${NC}"
+                echo -e "${GREEN}│${NC}  Logs: ${YELLOW}$NAME${NC}"
+                echo -e "${GREEN}╰──────────────────────────────────────────────╯${NC}"
+                echo ""
+                docker logs --tail 50 "$NAME"
+                echo ""
+                read -p "Press ENTER..."
+                ;;
+            4)
+                if [[ "$STATUS" == "running" ]]; then
+                    stop_container "$NAME"
+                else
+                    start_container "$NAME"
+                fi
+                sleep 1
+                ;;
+            5) 
+                delete_container "$NAME"
+                sleep 1
+                return
+                ;;
+            0) return ;;
+        esac
+    done
+}
+
+# -----------------------
+# Main
+# -----------------------
+main() {
+    # Vérifie et crée le réseau 'lan-local' si nécessaire.
+    ensure_network_exists 
+    
+    while true; do
+        clear
+        show_menu
+        read -p "Choice: " CHOICE
+        
+        case $CHOICE in
+            1)
+                draw_topology
+                read -p "Press ENTER to continue..."
+                ;;
+            2)
+                clear
+                echo -e "${CYAN}╭──────────────────────────────────────────────╮${NC}"
+                echo -e "${CYAN}│${NC}  Create Container"
+                echo -e "${CYAN}╰──────────────────────────────────────────────╯${NC}"
+                echo ""
+                read -p "Container name (empty=auto): " NAME
+                read -p "Image [$IMAGE_DEFAULT]: " IMAGE
+                read -p "Use init script? (Y/n): " USE_INIT
+                
+                [[ -z "$IMAGE" ]] && IMAGE="$IMAGE_DEFAULT"
+                [[ "$USE_INIT" =~ ^[Nn]$ ]] && USE_INIT="no" || USE_INIT="yes"
+                
+                echo ""
+                create_container "$NAME" "$IMAGE" "$USE_INIT"
+                echo ""
+                read -p "Press ENTER..."
+                ;;
+            3)
+                list_containers
+                read -p "Press ENTER..."
+                ;;
+            4)
+                manage_container_menu
+                ;;
+            5)
+                clear
+                ping_test
+                read -p "Press ENTER..."
+                ;;
+            6)
+                show_stats
+                read -p "Press ENTER..."
+                ;;
+            7)
+                edit_initscript
+                read -p "Press ENTER..."
+                ;;
+            8)
+                show_initscript
+                ;;
+            0)
+                clear
+                echo -e "${GREEN}Goodbye!${NC}"
+                exit 0
+                ;;
+        esac
+    done
+}
+
+# Lancer
+main

@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rer-config
+  namespace: rer-utbm
+data:
+  # Base de données du site UTBM (LXC-DB local)
+  DB_NAME: rer_db
+  DB_HOST: 10.10.33.3
+  DB_PORT: "5432"
+
+  # Cache / broker (Redis)
+  REDIS_URL: redis://10.10.33.4:6379/0
+
+  # Configuration HTTP
+  ALLOWED_HOSTS: "rer.utbm.fr,api.rer.utbm.fr"
+  CORS_ALLOWED_ORIGINS: "https://rer.utbm.fr"
+
+  # Paramètres de site (utilisés par Django settings)
+  SITE_CODE: "UTBM"
+  SITE_NAME: "Université de Technologie de Belfort-Montbéliard"
+
+  # Sous-réseaux selon VLSM
+  LOCAL_LAN_SUBNET: "10.10.0.0/19"   # LAN principal, ~8190 hôtes
+  VPN_SUBNET: "10.10.32.0/26"        # VPN site
+  DNS_SUBNET: "10.10.33.1/32"        # DNS
+  DHCP_SUBNET: "10.10.33.2/32"       # DHCP
+  API_SUBNET: "10.10.33.5/30"        # API internes / services
+  REDIS_SUBNET: "10.10.33.4/32"      # Redis
+  DB_SUBNET: "10.10.33.3/32"         # PostgreSQL
+
+  # URL interne de l'API vue par le frontend dans le cluster
+  API_URL: "http://django-service:8000"
