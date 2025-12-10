@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  frontend:
+    build: .
+    env_file:
+      - ./frontend.univ.env
+      - ./frontend.local.env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    ports:
+      - "${FRONTEND_PORT}:3000"
+    volumes:
+      - ./:/app
+    command: >
+      bash -c "npm install &&
+               npm start"
+    restart: unless-stopped
+    networks:
+      lan-local:
+        ipv4_address: ${IP_FRONTEND_NODE}
+
+networks:
+  lan-local:
+    external: true
+    name: ${LAN_NETWORK_NAME:-lan-local}

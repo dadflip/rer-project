@@ -6,7 +6,8 @@ services:
       - NET_ADMIN
       - SYS_MODULE
     env_file:
-      - ./wireguard.env
+      - ./wireguard.univ.env
+      - ./wireguard.local.env
     environment:
       PUID: ${PUID}
       PGID: ${PGID}
@@ -33,6 +34,8 @@ services:
 networks:
   lan-local:
     external: true
+    name: ${LAN_NETWORK_NAME:-lan-local}
 
   vpn-net:
     external: true
+    name: ${VPN_NETWORK_NAME:-vpn-net}

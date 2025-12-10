@@ -3,7 +3,8 @@ services:
     image: postgres:16-alpine
     container_name: rer-postgres-node
     env_file:
-      - ./postgres.env
+      - ./postgres.univ.env
+      - ./postgres.local.env
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -22,3 +23,4 @@ volumes:
 networks:
   lan-local:
     external: true
+    name: ${LAN_NETWORK_NAME:-lan-local}

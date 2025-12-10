@@ -1,9 +1,9 @@
 services:
   dns-node:
     build: ./dns
-    container_name: rer-dns-node
     env_file:
-      - ./dns-dhcp.env
+      - ./dns-dhcp.univ.env
+      - ./dns-dhcp.local.env
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -20,9 +20,9 @@ services:
 
   dhcp-node:
     build: ./dhcp
-    container_name: rer-dhcp-node
     env_file:
-      - ./dns-dhcp.env
+      - ./dns-dhcp.univ.env
+      - ./dns-dhcp.local.env
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -42,3 +42,4 @@ services:
 networks:
   lan-local:
     external: true
+    name: ${LAN_NETWORK_NAME:-lan-local}

@@ -1,18 +1,22 @@
 #!/bin/bash
 set -e
 
-# Génère les fichiers dnsmasq pour DNS et DHCP à partir du .env
+# Génère les fichiers dnsmasq pour DNS et DHCP à partir des .env
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ENV_FILE="${SCRIPT_DIR}/dns-dhcp.env"
+UNIV_ENV_FILE="${SCRIPT_DIR}/dns-dhcp.univ.env"
+LOCAL_ENV_FILE="${SCRIPT_DIR}/dns-dhcp.local.env"
 
-if [ ! -f "$ENV_FILE" ]; then
-  echo "$ENV_FILE introuvable !"
+if [ ! -f "$UNIV_ENV_FILE" ]; then
+  echo "$UNIV_ENV_FILE introuvable !"
   exit 1
 fi
 
-# Charger les variables depuis .env
+# Charger les variables depuis les .env (univ d'abord, puis local pour override)
 set -o allexport
-source "$ENV_FILE"
+source "$UNIV_ENV_FILE"
+if [ -f "$LOCAL_ENV_FILE" ]; then
+  source "$LOCAL_ENV_FILE"
+fi
 set +o allexport
 
 # Créer les dossiers de config si absents
